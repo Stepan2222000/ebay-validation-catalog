@@ -11,7 +11,9 @@ from validator.config import load_config
 from validator.fingerprint import fingerprint, norm_title
 from validator.validation import build_units, validate_groups
 
-HOST='194.164.245.107'; PW='Password123'
+from validator.config import load_dotenv, load_dsns
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+DSN = load_dsns()
 PASS=[]; FAIL=[]
 def check(name, cond, info=''):
     (PASS if cond else FAIL).append(name)
@@ -48,8 +50,8 @@ async def state(vd):
             for r in await vd.fetch('select * from validated_items order by item_id')}
 
 async def main():
-    ed = await asyncpg.connect(host=HOST,port=5415,user='admin',password=PW,database='ebay_data')
-    vd = await asyncpg.connect(host=HOST,port=5421,user='admin',password=PW,database='ebay_validation_catalog')
+    ed = await asyncpg.connect(dsn=DSN['EBAY_DATA_DSN'])
+    vd = await asyncpg.connect(dsn=DSN['VALIDATOR_DSN'])
     tre, trv = ed.transaction(), vd.transaction()
     await tre.start(); await trv.start()
     try:

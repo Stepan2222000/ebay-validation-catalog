@@ -12,7 +12,9 @@ from decimal import Decimal
 from validator.config import load_config
 from validator.events import run_tick, get_cursors, EPOCH
 
-HOST='194.164.245.107'; PW='Password123'
+from validator.config import load_dotenv, load_dsns
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+DSN = load_dsns()
 PASS=[]; FAIL=[]
 def check(name, cond, info=''):
     (PASS if cond else FAIL).append(name)
@@ -30,10 +32,10 @@ async def vstate(vd):
 
 async def main():
     cfg = load_config('/tmp/cfg_tick_test.yaml')
-    ed = await asyncpg.connect(host=HOST,port=5415,user='admin',password=PW,database='ebay_data')
-    vd = await asyncpg.connect(host=HOST,port=5421,user='admin',password=PW,database='ebay_validation_catalog')
-    pp = await asyncpg.connect(host=HOST,port=5416,user='admin',password=PW,database='parts_prices')
-    sm = await asyncpg.connect(host=HOST,port=5402,user='admin',password=PW,database='smart')
+    ed = await asyncpg.connect(dsn=DSN['EBAY_DATA_DSN'])
+    vd = await asyncpg.connect(dsn=DSN['VALIDATOR_DSN'])
+    pp = await asyncpg.connect(dsn=DSN['PARTS_PRICES_DSN'])
+    sm = await asyncpg.connect(dsn=DSN['SMART_DSN'])
     txs = [c.transaction() for c in (ed,vd,pp,sm)]
     for t in txs: await t.start()
     try:
