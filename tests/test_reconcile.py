@@ -1,0 +1,97 @@
+"""E2e-тест полной сверки (PLAN, этап 5) на реальных базах, всё под откат.
+
+Сценарий «тихой правки»: в ebay_data журнал changes ведут триггеры самой базы
+(items_log и др.), поэтому настоящая тихая правка возможна только в обход
+триггеров — имитируем это через session_replication_role=replica. Горячий
+цикл такого не видит, сверка обязана найти и исправить.
+Запуск: python3 tests/test_reconcile.py
+"""
+import asyncio, os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+import asyncpg, yaml
+from validator.config import load_config
+from validator.events import run_tick, get_cursors
+from validator.reconcile import run_reconcile
+
+HOST='194.164.245.107'; PW='Password123'
+PASS=[]; FAIL=[]
+def check(name, cond, info=''):
+    (PASS if cond else FAIL).append(name)
+    print(('  ok  ' if cond else '  FAIL')+f' {name}'+(f'  [{info}]' if info and not cond else ''))
+
+cfgd = {'tick_interval_sec':30,'cursor_overlap_sec':60,'full_reconcile_interval_sec':86400,
+        'reparse_done_retention_days':7,'allowed_conditions':['new'],
+        'checks':['dedup','condition','blocklist','whitelist','price'],
+        'rules':{'blocklist':[],'whitelist':{'require':'any','words':[]}}}
+open('/tmp/cfg_reconcile_test.yaml','w').write(yaml.safe_dump(cfgd))
+
+async def main():
+    cfg = load_config('/tmp/cfg_reconcile_test.yaml')
+    ed = await asyncpg.connect(host=HOST,port=5415,user='admin',password=PW,database='ebay_data')
+    vd = await asyncpg.connect(host=HOST,port=5421,user='admin',password=PW,database='ebay_validation_catalog')
+    pp = await asyncpg.connect(host=HOST,port=5416,user='admin',password=PW,database='parts_prices')
+    sm = await asyncpg.connect(host=HOST,port=5402,user='admin',password=PW,database='smart')
+    txs = [c.transaction() for c in (ed,vd,pp,sm)]
+    for t in txs: await t.start()
+    try:
+        await sm.execute("insert into parts(id,name,articles,is_draft,product_type) values "
+                         "('smart_99999902','тестовая деталь','{TST-R1}',false,'Для водного транспорта'),"
+                         "('smart_99999903','соседняя деталь','{TST-R2}',false,'Для водного транспорта')")
+        await pp.execute("insert into buying.smart_prices(smart_part_id,max_buy_price_usd,updated_by,updated_at) values('smart_99999902',100,'e2e-test',now()-interval '1 day')")
+        await ed.execute("insert into contexts overriding system value values (1,'EBAY_US','10001')")
+        await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value values (1,'s1',now())")
+        # 301 — старый item (вне overlap-окна); 302 — свежий И В ДРУГОМ СМАРТЕ:
+        # продвигает курсоры, не затягивая группу 301 в горячий цикл
+        await ed.execute("""insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead) values
+            (301,'Reconcile test impeller','new',50,1,now()-interval '1 day',now(),false),
+            (302,'Reconcile fresh impeller','new',60,1,now(),now(),false)""")
+        await ed.execute("""insert into catalog_items values
+            ('TST-R1',1,301,now()-interval '1 day',now(),0,true),
+            ('TST-R2',1,302,now(),now(),0,true)""")
+
+        print('=== подготовка: тик валидирует item ===')
+        await run_tick(ed,vd,pp,sm,cfg)
+        st = await vd.fetchrow("select status from validated_items where item_id=301")
+        check('301 одобрен тиком', st['status']=='approved', st)
+
+        print('=== тихая правка: цена меняется мимо журнала и курсоров ===')
+        # состарить журнальные записи от наших вставок (они дёргали бы overlap-окно)
+        await ed.execute("update changes set changed_at = changed_at - interval '1 day' where item_id in (301,302)")
+        # сама правка — в обход триггеров (имитация «мимо журнала»)
+        await ed.execute("set session_replication_role = replica")
+        await ed.execute("update items set price_usd=500 where item_id=301")
+        await ed.execute("set session_replication_role = origin")
+        s = await run_tick(ed,vd,pp,sm,cfg)
+        st = await vd.fetchrow("select status from validated_items where item_id=301")
+        check('горячий цикл правку НЕ увидел (item всё ещё approved)', st['status']=='approved', (s, dict(st)))
+
+        print('=== сверка находит и исправляет ===')
+        # задачи перепарса для проверки чистки: старая done, свежая done, активная
+        await vd.execute("""insert into reparse_tasks(item_id,reason,created_at,taken_at,done_at) values
+            (901,'old',now()-interval '30 days',now()-interval '30 days',now()-interval '20 days'),
+            (902,'fresh',now(),now(),now()),
+            (903,'active',now(),null,null)""")
+        total = await run_reconcile(ed,vd,pp,sm,cfg)
+        st = await vd.fetchrow("select status, reject_reasons, revoked_at from validated_items where item_id=301")
+        check('301 отозван по цене (500>100)', st['status']=='rejected' and list(st['reject_reasons'])==['price'], dict(st))
+        check('revoked_at установлен', st['revoked_at'] is not None)
+        check('расхождений исправлено >= 1', total['validated']>=1, total)
+        tasks = {r['item_id'] for r in await vd.fetch('select item_id from reparse_tasks')}
+        check('старая done-задача удалена, остальные живы', tasks=={902,903}, tasks)
+        curs = await vd.fetchval("select pos from cursors where name='last_reconcile_at'")
+        check('last_reconcile_at записан', curs is not None)
+
+        print('=== повторная сверка: расхождений нет ===')
+        total = await run_reconcile(ed,vd,pp,sm,cfg)
+        check('0 исправлений', total['validated']==0, total)
+
+        print()
+        print(f'PASSED {len(PASS)}  FAILED {len(FAIL)}')
+        if FAIL: print('FAILED:', FAIL)
+        assert not FAIL
+    finally:
+        for t in txs: await t.rollback()
+        print('rollback ok')
+        for c in (ed,vd,pp,sm): await c.close()
+
+asyncio.run(main())

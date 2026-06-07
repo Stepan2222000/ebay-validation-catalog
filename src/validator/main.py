@@ -10,6 +10,7 @@ import asyncpg
 from validator.config import load_config, load_dotenv, load_dsns
 from validator import db as dbmod
 from validator.events import run_tick
+from validator.reconcile import run_reconcile
 
 log = logging.getLogger('validator')
 
@@ -80,6 +81,19 @@ async def amain() -> None:
                 log.info('тик: кандидатов=%s, групп=%s, ревалидаций=%s, скипов=%s, перепарс=%s',
                          s['candidates'], s['parts'], s['validated'], s['skipped'], s['reparse'])
             log.debug('тик занял %.2fs', time.monotonic() - tick_started)
+
+            # полная сверка раз в full_reconcile_interval_sec (SPEC §5.3);
+            # момент последней сверки переживает рестарт (cursors.last_reconcile_at)
+            vd = await conn('VALIDATOR_DSN')
+            due = await vd.fetchval(
+                "select coalesce((select pos from cursors where name = 'last_reconcile_at'),"
+                " to_timestamp(0)) <= now() - $1 * interval '1 second'",
+                cfg.full_reconcile_interval_sec)
+            if due:
+                log.info('запускаю полную сверку')
+                await run_reconcile(await conn('EBAY_DATA_DSN'), vd,
+                                    await conn('PARTS_PRICES_DSN'), await conn('SMART_DSN'),
+                                    cfg)
         except Exception:
             log.exception('тик упал — курсоры не сдвинуты, событие будет повторено')
 

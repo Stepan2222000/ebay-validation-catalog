@@ -184,8 +184,13 @@ where item_id = $1 and part_id = $2 and context_id = $3
 """
 
 
-async def validate_groups(vd, by_part: dict, cfg, prices: dict) -> dict:
-    """Валидирует полные группы смартов; пишет вердикты. Возвращает статистику и переходы."""
+async def validate_groups(vd, by_part: dict, cfg, prices: dict,
+                          bump_unchanged: bool = True) -> dict:
+    """Валидирует полные группы смартов; пишет вердикты. Возвращает статистику и переходы.
+
+    bump_unchanged=False — для полной сверки: не обновлять last_checked_at
+    нетронутым строкам (иначе сверка перезаписывала бы миллионы строк впустую).
+    """
     if not by_part:
         return {'validated': 0, 'skipped': 0, 'transitions': []}
 
@@ -225,6 +230,6 @@ async def validate_groups(vd, by_part: dict, cfg, prices: dict) -> dict:
 
     if upserts:
         await vd.executemany(_UPSERT_SQL, upserts)
-    if bumps:
+    if bumps and bump_unchanged:
         await vd.executemany(_BUMP_SQL, bumps)
     return {'validated': len(upserts), 'skipped': len(bumps), 'transitions': transitions}

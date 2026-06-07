@@ -1,0 +1,12 @@
+services:
+  validator:
+    image: ghcr.io/stepan2222000/ebay-validation-catalog:${IMAGE_TAG:-latest}
+    container_name: ebay_validation_catalog_app
+    restart: unless-stopped
+    env_file: .env            # прод-DSN с именами контейнеров (см. .env.example)
+    networks:
+      - db_default            # общая сеть постгрес-контейнеров: базы видны по именам
+
+networks:
+  db_default:
+    external: true
