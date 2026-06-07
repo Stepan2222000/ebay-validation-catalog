@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import yaml
 
 VALID_CHECKS = ('dedup', 'condition', 'blocklist', 'whitelist', 'price')
-DSN_KEYS = ('EBAY_DATA_DSN', 'PARTS_PRICES_DSN', 'PARTS_RESEARCH_DSN', 'VALIDATOR_DSN')
+DSN_KEYS = ('EBAY_DATA_DSN', 'PARTS_PRICES_DSN', 'SMART_DSN', 'VALIDATOR_DSN')
 
 
 @dataclass(frozen=True)
