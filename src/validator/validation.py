@@ -1,8 +1,8 @@
-"""Validation core (SPEC §3, §4): a batch of part groups -> verdicts in validated_items.
+"""Ядро валидации (SPEC §3, §4): пачка групп смарт-артикулов -> вердикты в validated_items.
 
-The caller supplies FULL groups: for every touched smart part, every catalog
-membership row of that part. Dedup is a competition over the whole group, so
-partial groups would produce wrong slot assignments.
+Вызывающий обязан передавать ПОЛНЫЕ группы: для каждого затронутого смарт-артикула —
+все строки членства его каталога. Дедуп — соревнование по всей группе, на неполной
+группе слоты раздались бы неверно.
 """
 from dataclasses import dataclass, field
 
@@ -13,19 +13,19 @@ SINGLE_CHECKS = ('condition', 'blocklist', 'whitelist', 'price')
 
 @dataclass
 class Unit:
-    """One validation unit (SPEC §2): item within a smart part within a context."""
+    """Единица валидации (SPEC §2): item в рамках смарт-артикула и контекста."""
     item_id: int
     part_id: str
     context_id: int
-    articles: list           # sorted, all current catalog memberships in this part
+    articles: list           # все текущие членства в каталоге внутри этого смарта, отсортированы
     first_seen_at: object
-    alive: bool              # catalog is_active AND NOT items.is_dead
+    alive: bool              # catalog is_active И НЕ items.is_dead
     title: str | None
     condition: str | None
     price_usd: object
     seller_id: int | None
     shipping_cost: object
-    # filled during validation:
+    # заполняется в ходе валидации:
     fp: bytes | None = None
     status: str = 'pending'
     reasons: list = field(default_factory=list)
@@ -36,13 +36,13 @@ class Unit:
 
 
 def build_units(rows, mapping) -> dict:
-    """Aggregate detailed catalog membership rows into units grouped by part.
+    """Агрегирует детальные строки членства каталога в единицы, сгруппированные по смартам.
 
-    rows: records with article, context_id, item_id, first_seen_at (items),
+    rows: записи с полями article, context_id, item_id, first_seen_at (из items),
           catalog_active, title, condition, price_usd, seller_id, is_dead,
           shipping_cost.
     mapping: article -> part_id.
-    Returns {part_id: [Unit, ...]}.
+    Возвращает {part_id: [Unit, ...]}.
     """
     units: dict[tuple, Unit] = {}
     for r in rows:
@@ -64,7 +64,7 @@ def build_units(rows, mapping) -> dict:
         else:
             if r['article'] not in u.articles:
                 u.articles.append(r['article'])
-            # any active membership keeps the unit in the catalog
+            # любое активное членство удерживает единицу в каталоге
             u.alive = u.alive or (bool(r['catalog_active']) and not r['is_dead'])
     by_part: dict[str, list] = {}
     for u in units.values():
@@ -74,7 +74,7 @@ def build_units(rows, mapping) -> dict:
 
 
 def _single_check(name: str, u: Unit, cfg, max_price) -> str | None:
-    """Run one single-listing check; return reason on failure, None on pass."""
+    """Одиночная проверка объявления; возвращает причину отказа или None."""
     if name == 'condition':
         if u.condition not in cfg.allowed_conditions:
             return 'condition'
@@ -95,7 +95,7 @@ def _single_check(name: str, u: Unit, cfg, max_price) -> str | None:
 
 
 def judge_group(units: list, cfg, max_price) -> None:
-    """Decide status/reasons for every unit of one part group (SPEC §3)."""
+    """Выносит статус/причины каждой единице одной группы смарт-артикула (SPEC §3)."""
     if 'dedup' in cfg.checks:
         i = cfg.checks.index('dedup')
         pre, post = cfg.checks[:i], cfg.checks[i + 1:]
@@ -104,26 +104,27 @@ def judge_group(units: list, cfg, max_price) -> None:
 
     judgeable = []
     for u in units:
-        if u.title is None:           # parser stub: no data yet
+        if u.title is None:           # заглушка парсера: данных ещё нет
             u.status, u.reasons, u.fp = 'pending', [], None
             continue
         u.fp = fingerprint(u.title, u.seller_id, u.condition, u.price_usd,
                            u.shipping_cost, max_price, u.alive)
-        if not u.alive:               # built-in, not configurable (SPEC §3)
+        if not u.alive:               # встроенная, невыключаемая проверка (SPEC §3)
             u.status, u.reasons = 'rejected', ['inactive']
             continue
         judgeable.append(u)
 
-    failed: dict[int, str] = {}       # item_id -> reason from pre-dedup checks
+    failed: dict[int, str] = {}       # item_id -> причина из пред-дедупных проверок
     for u in judgeable:
         for name in pre:
             if reason := _single_check(name, u, cfg, max_price):
                 failed[u.item_id] = reason
                 break
 
-    # dedup competition among pre-pass units (SPEC §3). Seller and title slots
-    # are claimed independently: the earliest contender holds a slot even if it
-    # loses the other dimension ("the seller's first listing", literally).
+    # Соревнование дедупа среди прошедших пред-дедупные проверки (SPEC §3).
+    # Слоты продавца и тайтла занимаются независимо: самый ранний претендент
+    # держит слот, даже если сам проиграл по другому измерению
+    # (буквально «первое объявление продавца»).
     if 'dedup' in cfg.checks:
         contenders = sorted((u for u in judgeable if u.item_id not in failed),
                             key=lambda x: (x.first_seen_at, x.item_id))
@@ -184,7 +185,7 @@ where item_id = $1 and part_id = $2 and context_id = $3
 
 
 async def validate_groups(vd, by_part: dict, cfg, prices: dict) -> dict:
-    """Validate full part groups; write verdicts. Returns stats + transitions."""
+    """Валидирует полные группы смартов; пишет вердикты. Возвращает статистику и переходы."""
     if not by_part:
         return {'validated': 0, 'skipped': 0, 'transitions': []}
 
@@ -209,6 +210,7 @@ async def validate_groups(vd, by_part: dict, cfg, prices: dict) -> dict:
                 and list(old['articles']) == u.articles
             )
             if unchanged:
+                # ни данные, ни вердикт не изменились — только отметка «смотрели»
                 bumps.append(u.key)
                 continue
             upserts.append((

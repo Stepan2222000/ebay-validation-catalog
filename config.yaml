@@ -1,16 +1,16 @@
-# Validator configuration. Read ONCE at service start (SPEC §7) — restart to apply changes.
-# Connection DSNs live in .env, not here.
+# Конфигурация валидатора. Читается ОДИН РАЗ при старте (SPEC §7) — после правки перезапусти сервис.
+# DSN подключений живут в .env, не здесь.
 
-tick_interval_sec: 30            # hot-loop period (SPEC §5.2)
-cursor_overlap_sec: 60           # cursor queries look this far behind the bookmark
-full_reconcile_interval_sec: 86400  # full fingerprint audit period (SPEC §5.3)
-reparse_done_retention_days: 7   # keep completed reparse tasks this long
+tick_interval_sec: 30            # период горячего цикла (SPEC §5.2)
+cursor_overlap_sec: 60           # насколько курсорные запросы заглядывают назад от закладки
+full_reconcile_interval_sec: 86400  # период полной сверки отпечатков (SPEC §5.3)
+reparse_done_retention_days: 7   # сколько хранить выполненные задачи перепарса
 
-allowed_conditions: [new]        # accepted items.condition values
+allowed_conditions: [new]        # допустимые значения items.condition
 
-# Checks: order matters, first failure stops the chain; a check absent from the
-# list is disabled. dedup position defines who competes (SPEC §3): dedup first =
-# "take the seller's earliest listing and only validate that one".
+# Проверки: порядок важен, обрыв на первой провалившейся; проверки нет в списке =
+# она выключена. Позиция dedup задаёт, кто участвует в соревновании (SPEC §3):
+# dedup первым = «берём первое объявление продавца и только его проверяем дальше».
 checks:
   - dedup
   - condition
@@ -19,7 +19,7 @@ checks:
   - price
 
 rules:
-  blocklist: []                  # entries: {pattern, match_type: word|substring, scope: global, active: true}
+  blocklist: []                  # записи: {pattern, match_type: word|substring, scope: global, active: true}
   whitelist:
-    require: any                 # any = one match is enough
-    words: []                    # empty list = whitelist check disabled
+    require: any                 # any = достаточно одного совпадения
+    words: []                    # пустой список = проверка whitelist выключена

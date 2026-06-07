@@ -1,4 +1,4 @@
--- Validator schema (database: ebay_validation_catalog). Columns per SPEC §6.
+-- Схема валидатора (база ebay_validation_catalog). Колонки — по SPEC §6.
 
 create table if not exists validated_items (
     item_id            bigint      not null,
@@ -36,6 +36,7 @@ create table if not exists reparse_tasks (
     done_at    timestamptz
 );
 
+-- активные задачи (для дедупа при постановке) и очередь для парсера
 create index if not exists idx_rt_active on reparse_tasks (item_id) where done_at is null;
 create index if not exists idx_rt_queue  on reparse_tasks (task_id) where taken_at is null;
 

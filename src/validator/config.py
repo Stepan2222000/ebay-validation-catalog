@@ -1,4 +1,4 @@
-"""YAML config loading and validation (SPEC §7). Read once at startup."""
+"""Загрузка и валидация YAML-конфига (SPEC §7). Читается один раз при старте."""
 import os
 import re
 from dataclasses import dataclass
@@ -24,8 +24,8 @@ class Config:
     reparse_done_retention_days: int
     allowed_conditions: frozenset
     checks: tuple
-    blocklist: tuple  # of Rule
-    whitelist: tuple  # of Rule
+    blocklist: tuple  # кортеж Rule
+    whitelist: tuple  # кортеж Rule
 
 
 def _compile_rule(entry: dict, where: str) -> Rule | None:
@@ -42,6 +42,9 @@ def _compile_rule(entry: dict, where: str) -> Rule | None:
         raise ValueError(f'{where}: empty pattern')
     escaped = re.escape(pattern)
     if match_type == 'word':
+        # целое слово: вокруг паттерна нет буквенно-цифровых символов (юникод);
+        # матчим по уже приведённой к нижнему регистру строке — без IGNORECASE
+        # и его юникод-сюрпризов
         regex = re.compile(r'(?<!\w)' + escaped + r'(?!\w)')
     elif match_type == 'substring':
         regex = re.compile(escaped)
@@ -83,7 +86,7 @@ def load_config(path: str = 'config.yaml') -> Config:
 
 
 def load_dotenv(path: str = '.env') -> None:
-    """Tiny .env loader: KEY=VALUE lines, no override of existing env."""
+    """Простейший загрузчик .env: строки KEY=VALUE; существующие переменные не перетирает."""
     if not os.path.exists(path):
         return
     for line in open(path):

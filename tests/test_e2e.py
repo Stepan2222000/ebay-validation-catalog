@@ -1,8 +1,8 @@
-"""End-to-end test of the validation core (PLAN stage 3).
+"""E2e-тест ядра валидации (PLAN, этап 3).
 
-Runs against the REAL ebay_data / ebay_validation_catalog servers, but every
-write happens inside transactions that are rolled back at the end — both
-databases are left untouched. Run: python3 tests/test_e2e.py
+Гоняется против НАСТОЯЩИХ серверов ebay_data / ebay_validation_catalog, но все
+записи происходят в транзакциях, которые в конце откатываются — обе базы
+остаются нетронутыми. Запуск: python3 tests/test_e2e.py
 """
 import asyncio, os, sys, asyncpg, yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -53,10 +53,10 @@ async def main():
     tre, trv = ed.transaction(), vd.transaction()
     await tre.start(); await trv.start()
     try:
-        # ---------- synthetic ebay_data ----------
+        # ---------- синтетические данные в ebay_data ----------
         await ed.execute("insert into contexts overriding system value values (1,'EBAY_US','10001')")
         await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value select g,'s'||g,now() from generate_series(1,12) g")
-        items = [  # id, title, condition, price, seller, +sec
+        items = [  # id, тайтл, condition, цена, продавец, +сек к first_seen_at
           (101,'Suzuki impeller kit 17400-90J11','new',50,1,0),
           (102,'Suzuki impeller repair kit OEM','new',55,1,1),
           (103,'Suzuki  IMPELLER kit  17400-90J11!','new',60,2,2),
@@ -75,9 +75,9 @@ async def main():
         for iid,t,c,p,s,off in items:
             await ed.execute("""insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead)
                 values($1,$2,$3,$4,$5,timestamptz '2026-06-01 00:00:00+00' + $6*interval '1 second',now(),false)""",iid,t,c,p,s,off)
-        await ed.execute("insert into items(item_id,first_seen_at,last_seen_at,is_dead) values(108,now(),now(),false)")  # stub
+        await ed.execute("insert into items(item_id,first_seen_at,last_seen_at,is_dead) values(108,now(),now(),false)")  # заглушка
         await ed.execute("insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead) values(130,'Lonely impeller no seller','new',15,null,now(),now(),false)")
-        # memberships: smart_X = A1+A2; smart_Y = B1; smart_Z = C1 (dedup-order scenario); 140/141 in smart_W = D1
+        # членства: smart_X = A1+A2; smart_Y = B1; smart_Z = C1 (сценарий порядка дедупа); 140/141 в smart_W = D1
         mem = [('A1',101),('A2',101),('A1',102),('A2',103),('A1',104),('A1',105),('A1',106),('A1',107),
                ('A1',108),('A1',109),('A1',110),('B1',111),('C1',120),('C1',121),('D1',140),('D1',141),('B1',130)]
         for a,iid in mem:

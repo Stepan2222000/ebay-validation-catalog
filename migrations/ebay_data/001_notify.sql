@@ -1,11 +1,11 @@
--- Passive NOTIFY triggers in ebay_data (SPEC §5.2): wake the validator when there
--- may be new work. Statement-level — one notification per statement regardless of
--- row count; identical payloads within a transaction are collapsed by Postgres.
--- Idempotent (CREATE OR REPLACE); applied on every service start (SPEC §6).
+-- Пассивные NOTIFY-триггеры в ebay_data (SPEC §5.2): будят валидатор, когда
+-- может появиться работа. Statement-level — одна нотификация на statement
+-- независимо от числа строк; одинаковые payload внутри транзакции Postgres
+-- схлопывает сам. Идемпотентно (CREATE OR REPLACE); применяется при каждом
+-- старте сервиса (SPEC §6).
 --
--- Known gap: inserts that target a partition of `changes` directly (bypassing the
--- parent) do not fire the parent's statement-level trigger — covered by the
--- timer-driven tick (SPEC §5.2).
+-- Известная дыра: вставка напрямую в партицию `changes` мимо родителя
+-- statement-триггер родителя не зажигает — закрыто тиком по таймеру (SPEC §5.2).
 
 create or replace function validator_notify() returns trigger language plpgsql as $$
 begin
