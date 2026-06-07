@@ -1,0 +1,25 @@
+# Validator configuration. Read ONCE at service start (SPEC §7) — restart to apply changes.
+# Connection DSNs live in .env, not here.
+
+tick_interval_sec: 30            # hot-loop period (SPEC §5.2)
+cursor_overlap_sec: 60           # cursor queries look this far behind the bookmark
+full_reconcile_interval_sec: 86400  # full fingerprint audit period (SPEC §5.3)
+reparse_done_retention_days: 7   # keep completed reparse tasks this long
+
+allowed_conditions: [new]        # accepted items.condition values
+
+# Checks: order matters, first failure stops the chain; a check absent from the
+# list is disabled. dedup position defines who competes (SPEC §3): dedup first =
+# "take the seller's earliest listing and only validate that one".
+checks:
+  - dedup
+  - condition
+  - blocklist
+  - whitelist
+  - price
+
+rules:
+  blocklist: []                  # entries: {pattern, match_type: word|substring, scope: global, active: true}
+  whitelist:
+    require: any                 # any = one match is enough
+    words: []                    # empty list = whitelist check disabled
