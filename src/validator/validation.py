@@ -8,8 +8,6 @@ from dataclasses import dataclass, field
 
 from .fingerprint import norm_title, fingerprint
 
-SINGLE_CHECKS = ('condition', 'blocklist', 'whitelist', 'price')
-
 
 @dataclass
 class Unit:
@@ -33,6 +31,10 @@ class Unit:
     @property
     def key(self):
         return (self.item_id, self.part_id, self.context_id)
+
+    @property
+    def title_low(self) -> str:
+        return (self.title or '').lower()
 
 
 def build_units(rows, mapping) -> dict:
@@ -79,14 +81,11 @@ def _single_check(name: str, u: Unit, cfg, max_price) -> str | None:
         if u.condition not in cfg.allowed_conditions:
             return 'condition'
     elif name == 'blocklist':
-        low = (u.title or '').lower()
-        if any(r.regex.search(low) for r in cfg.blocklist):
+        if any(p.search(u.title_low) for p in cfg.blocklist):
             return 'blocklist'
     elif name == 'whitelist':
-        if cfg.whitelist:
-            low = (u.title or '').lower()
-            if not any(r.regex.search(low) for r in cfg.whitelist):
-                return 'whitelist'
+        if cfg.whitelist and not any(p.search(u.title_low) for p in cfg.whitelist):
+            return 'whitelist'
     elif name == 'price':
         if max_price is not None and u.price_usd is not None:
             if u.price_usd + (u.shipping_cost or 0) > max_price:
@@ -192,17 +191,20 @@ async def validate_groups(vd, by_part: dict, cfg, prices: dict,
     нетронутым строкам (иначе сверка перезаписывала бы миллионы строк впустую).
     """
     if not by_part:
-        return {'validated': 0, 'skipped': 0, 'transitions': []}
+        return {'validated': 0, 'skipped': 0}
 
+    # только колонки, участвующие в сравнении «изменилось ли»: на полной сверке
+    # это миллионы строк, широкие колонки (title и пр.) тянуть незачем
     existing = {
         (r['item_id'], r['part_id'], r['context_id']): r
         for r in await vd.fetch(
-            'select * from validated_items where part_id = any($1::text[])',
+            'select item_id, part_id, context_id, fingerprint, status, reject_reasons, articles'
+            ' from validated_items where part_id = any($1::text[])',
             list(by_part),
         )
     }
 
-    upserts, bumps, transitions = [], [], []
+    upserts, bumps = [], []
     for part_id, units in by_part.items():
         judge_group(units, cfg, prices.get(part_id))
         for u in units:
@@ -224,12 +226,9 @@ async def validate_groups(vd, by_part: dict, cfg, prices: dict,
                 u.condition, u.price_usd, u.shipping_cost, prices.get(part_id),
                 u.status, u.reasons, u.fp,
             ))
-            transitions.append(
-                (u.item_id, u.part_id, old['status'] if old else '-', u.status, u.reasons)
-            )
 
     if upserts:
         await vd.executemany(_UPSERT_SQL, upserts)
     if bumps and bump_unchanged:
         await vd.executemany(_BUMP_SQL, bumps)
-    return {'validated': len(upserts), 'skipped': len(bumps), 'transitions': transitions}
+    return {'validated': len(upserts), 'skipped': len(bumps)}

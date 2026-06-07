@@ -1,4 +1,5 @@
 """Горячий цикл (SPEC §5.2): курсорные выборки -> кандидаты -> полные группы -> валидация."""
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,20 @@ log = logging.getLogger('validator.events')
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 CURSOR_NAMES = ('items_first_seen', 'catalog_first_seen', 'changes',
                 'shipping_updated', 'smart_prices_updated')
+
+# дельта-источники горячего цикла: имя курсора -> запрос (колонка времени — ts)
+DELTA_SQL = {
+    'items_first_seen':
+        'select item_id, first_seen_at as ts from items where first_seen_at > $1',
+    'catalog_first_seen':
+        'select item_id, first_seen_at as ts from catalog_items where first_seen_at > $1',
+    'changes':
+        'select item_id, field_id, changed_at as ts from changes where changed_at > $1',
+    'shipping_updated':
+        'select item_id, updated_at as ts from item_shipping where updated_at > $1',
+    'smart_prices_updated':
+        'select smart_part_id, updated_at as ts from buying.smart_prices where updated_at > $1',
+}
 
 # полные группы: все строки членства каталога по заданным артикулам
 FETCH_GROUPS_SQL = """
@@ -26,6 +41,8 @@ insert into reparse_tasks(item_id, reason)
 select $1, $2
 where not exists (select 1 from reparse_tasks where item_id = $1 and done_at is null)
 """
+
+_title_fid: int | None = None  # field_id поля title в словаре fields — статичен, кэшируем
 
 
 async def get_cursors(vd) -> dict:
@@ -53,6 +70,22 @@ async def load_prices(pp) -> dict:
             for r in await pp.fetch('select smart_part_id, max_buy_price_usd from buying.smart_prices')}
 
 
+async def _delta(conn, name: str, curs: dict, ov: timedelta, new_pos: dict) -> list:
+    """Дельта одного источника: строки новее закладки (с перекрытием) + сдвиг закладки."""
+    rows = await conn.fetch(DELTA_SQL[name], curs[name] - ov)
+    if rows:
+        new_pos[name] = max(r['ts'] for r in rows)
+    return rows
+
+
+async def _title_field_id(ed) -> int:
+    global _title_fid
+    if _title_fid is None:
+        _title_fid = await ed.fetchval(
+            "select field_id from fields where scope = 'item' and name = 'title'")
+    return _title_fid
+
+
 async def run_tick(ed, vd, pp, sm, cfg) -> dict:
     """Один тик: собрать дельту по курсорам, провалидировать затронутые группы.
 
@@ -61,63 +94,35 @@ async def run_tick(ed, vd, pp, sm, cfg) -> dict:
     Каждый запрос смотрит на overlap назад от закладки — защита от транзакций
     парсера, закоммиченных «в прошлое» (now() в Postgres — время начала транзакции).
     """
-    mapping = await load_mapping(sm)
-    prices = await load_prices(pp)
-    curs = await get_cursors(vd)
+    # независимые загрузки из трёх разных баз — параллельно
+    mapping, prices, curs, title_fid = await asyncio.gather(
+        load_mapping(sm), load_prices(pp), get_cursors(vd), _title_field_id(ed))
     ov = timedelta(seconds=cfg.cursor_overlap_sec)
 
     new_pos: dict = {}
-    cand: set = set()        # item_id кандидатов
-    force_parts: set = set() # смарты, чьи группы затронуты сменой макс. цены
+    # дельты ebay_data — последовательно: они на одном соединении, asyncpg
+    # не выполняет запросы одного соединения параллельно
+    items_rows = await _delta(ed, 'items_first_seen', curs, ov, new_pos)
+    catalog_rows = await _delta(ed, 'catalog_first_seen', curs, ov, new_pos)
+    changes_rows = await _delta(ed, 'changes', curs, ov, new_pos)
+    shipping_rows = await _delta(ed, 'shipping_updated', curs, ov, new_pos)
+    price_rows = await _delta(pp, 'smart_prices_updated', curs, ov, new_pos)
 
-    rows = await ed.fetch(
-        'select item_id, first_seen_at from items where first_seen_at > $1',
-        curs['items_first_seen'] - ov)
-    if rows:
-        cand |= {r['item_id'] for r in rows}
-        new_pos['items_first_seen'] = max(r['first_seen_at'] for r in rows)
-
-    rows = await ed.fetch(
-        'select item_id, first_seen_at from catalog_items where first_seen_at > $1',
-        curs['catalog_first_seen'] - ov)
-    if rows:
-        cand |= {r['item_id'] for r in rows}
-        new_pos['catalog_first_seen'] = max(r['first_seen_at'] for r in rows)
-
-    title_fid = await ed.fetchval(
-        "select field_id from fields where scope = 'item' and name = 'title'")
-    rows = await ed.fetch(
-        'select item_id, changed_at, field_id from changes where changed_at > $1',
-        curs['changes'] - ov)
-    title_changed: set = set()
-    if rows:
-        cand |= {r['item_id'] for r in rows}
-        title_changed = {r['item_id'] for r in rows if r['field_id'] == title_fid}
-        new_pos['changes'] = max(r['changed_at'] for r in rows)
-
-    rows = await ed.fetch(
-        'select item_id, updated_at from item_shipping where updated_at > $1',
-        curs['shipping_updated'] - ov)
-    if rows:
-        cand |= {r['item_id'] for r in rows}
-        new_pos['shipping_updated'] = max(r['updated_at'] for r in rows)
-
-    rows = await pp.fetch(
-        'select smart_part_id, updated_at from buying.smart_prices where updated_at > $1',
-        curs['smart_prices_updated'] - ov)
-    if rows:
-        force_parts |= {r['smart_part_id'] for r in rows}
-        new_pos['smart_prices_updated'] = max(r['updated_at'] for r in rows)
+    cand = {r['item_id'] for rows in (items_rows, catalog_rows, changes_rows, shipping_rows)
+            for r in rows}
+    title_changed = {r['item_id'] for r in changes_rows if r['field_id'] == title_fid}
+    # смарты, чьи группы затронуты сменой макс. цены
+    force_parts = {r['smart_part_id'] for r in price_rows}
 
     # кандидаты -> затронутые смарты -> ПОЛНЫЕ группы (дедуп считается по всей группе)
     parts: set = set(force_parts)
     if cand:
         rows = await ed.fetch(
-            'select distinct article, item_id from catalog_items where item_id = any($1::bigint[])',
+            'select distinct article from catalog_items where item_id = any($1::bigint[])',
             list(cand))
         parts |= {mapping[r['article']] for r in rows if r['article'] in mapping}
 
-    stats = {'validated': 0, 'skipped': 0, 'transitions': []}
+    stats = {'validated': 0, 'skipped': 0}
     if parts:
         articles = [a for a, p in mapping.items() if p in parts]
         group_rows = await ed.fetch(FETCH_GROUPS_SQL, articles)

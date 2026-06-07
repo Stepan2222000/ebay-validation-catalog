@@ -6,36 +6,17 @@
 цикл такого не видит, сверка обязана найти и исправить.
 Запуск: python3 tests/test_reconcile.py
 """
-import asyncio, os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-import asyncpg, yaml
-from validator.config import load_config
-from validator.events import run_tick, get_cursors
+import asyncio
+
+from _helpers import check, finish, rollback_conns, write_cfg
+from validator.events import run_tick
 from validator.reconcile import run_reconcile
 
-from validator.config import load_dotenv, load_dsns
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
-DSN = load_dsns()
-PASS=[]; FAIL=[]
-def check(name, cond, info=''):
-    (PASS if cond else FAIL).append(name)
-    print(('  ok  ' if cond else '  FAIL')+f' {name}'+(f'  [{info}]' if info and not cond else ''))
-
-cfgd = {'tick_interval_sec':30,'cursor_overlap_sec':60,'full_reconcile_interval_sec':86400,
-        'reparse_done_retention_days':7,'allowed_conditions':['new'],
-        'checks':['dedup','condition','blocklist','whitelist','price'],
-        'rules':{'blocklist':[],'whitelist':{'require':'any','words':[]}}}
-open('/tmp/cfg_reconcile_test.yaml','w').write(yaml.safe_dump(cfgd))
 
 async def main():
-    cfg = load_config('/tmp/cfg_reconcile_test.yaml')
-    ed = await asyncpg.connect(dsn=DSN['EBAY_DATA_DSN'])
-    vd = await asyncpg.connect(dsn=DSN['VALIDATOR_DSN'])
-    pp = await asyncpg.connect(dsn=DSN['PARTS_PRICES_DSN'])
-    sm = await asyncpg.connect(dsn=DSN['SMART_DSN'])
-    txs = [c.transaction() for c in (ed,vd,pp,sm)]
-    for t in txs: await t.start()
-    try:
+    cfg = write_cfg(['dedup', 'condition', 'blocklist', 'whitelist', 'price'])
+    async with rollback_conns('EBAY_DATA_DSN', 'VALIDATOR_DSN',
+                              'PARTS_PRICES_DSN', 'SMART_DSN') as (ed, vd, pp, sm):
         await sm.execute("insert into parts(id,name,articles,is_draft,product_type) values "
                          "('smart_99999902','тестовая деталь','{TST-R1}',false,'Для водного транспорта'),"
                          "('smart_99999903','соседняя деталь','{TST-R2}',false,'Для водного транспорта')")
@@ -87,13 +68,6 @@ async def main():
         total = await run_reconcile(ed,vd,pp,sm,cfg)
         check('0 исправлений', total['validated']==0, total)
 
-        print()
-        print(f'PASSED {len(PASS)}  FAILED {len(FAIL)}')
-        if FAIL: print('FAILED:', FAIL)
-        assert not FAIL
-    finally:
-        for t in txs: await t.rollback()
-        print('rollback ok')
-        for c in (ed,vd,pp,sm): await c.close()
+        finish()
 
 asyncio.run(main())

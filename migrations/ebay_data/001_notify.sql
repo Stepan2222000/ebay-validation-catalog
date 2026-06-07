@@ -7,9 +7,11 @@
 -- Известная дыра: вставка напрямую в партицию `changes` мимо родителя
 -- statement-триггер родителя не зажигает — закрыто тиком по таймеру (SPEC §5.2).
 
+-- payload пуст: нотификация — только сигнал «проснись», слушатель её содержимое
+-- не читает (вся дельта добирается курсорными запросами)
 create or replace function validator_notify() returns trigger language plpgsql as $$
 begin
-    perform pg_notify('validator_events', json_build_object('tbl', TG_TABLE_NAME, 'op', TG_OP)::text);
+    perform pg_notify('validator_events', '');
     return null;
 end $$;
 

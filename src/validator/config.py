@@ -10,13 +10,6 @@ DSN_KEYS = ('EBAY_DATA_DSN', 'PARTS_PRICES_DSN', 'SMART_DSN', 'VALIDATOR_DSN')
 
 
 @dataclass(frozen=True)
-class Rule:
-    pattern: str
-    match_type: str  # word | substring
-    regex: re.Pattern
-
-
-@dataclass(frozen=True)
 class Config:
     tick_interval_sec: int
     cursor_overlap_sec: int
@@ -24,11 +17,12 @@ class Config:
     reparse_done_retention_days: int
     allowed_conditions: frozenset
     checks: tuple
-    blocklist: tuple  # кортеж Rule
-    whitelist: tuple  # кортеж Rule
+    blocklist: tuple  # скомпилированные re.Pattern
+    whitelist: tuple  # скомпилированные re.Pattern
 
 
-def _compile_rule(entry: dict, where: str) -> Rule | None:
+def _compile_rule(entry: dict, where: str) -> re.Pattern | None:
+    """Правило -> скомпилированный regex; вся семантика match_type запекается здесь."""
     if not isinstance(entry, dict) or 'pattern' not in entry:
         raise ValueError(f'{where}: each entry needs a "pattern": {entry!r}')
     if not entry.get('active', True):
@@ -45,12 +39,10 @@ def _compile_rule(entry: dict, where: str) -> Rule | None:
         # целое слово: вокруг паттерна нет буквенно-цифровых символов (юникод);
         # матчим по уже приведённой к нижнему регистру строке — без IGNORECASE
         # и его юникод-сюрпризов
-        regex = re.compile(r'(?<!\w)' + escaped + r'(?!\w)')
-    elif match_type == 'substring':
-        regex = re.compile(escaped)
-    else:
-        raise ValueError(f'{where}: match_type must be word|substring, got {match_type!r}')
-    return Rule(pattern=pattern, match_type=match_type, regex=regex)
+        return re.compile(r'(?<!\w)' + escaped + r'(?!\w)')
+    if match_type == 'substring':
+        return re.compile(escaped)
+    raise ValueError(f'{where}: match_type must be word|substring, got {match_type!r}')
 
 
 def load_config(path: str = 'config.yaml') -> Config:
