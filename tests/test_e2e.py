@@ -24,7 +24,8 @@ async def main():
     async with rollback_conns('EBAY_DATA_DSN', 'VALIDATOR_DSN') as (ed, vd):
         # ---------- синтетические данные в ebay_data ----------
         await ed.execute("insert into contexts overriding system value values (1,'EBAY_US','10001')")
-        await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value select g,'s'||g,now() from generate_series(1,12) g")
+        await ed.execute("insert into search_profiles(profile_id,context_id,condition) overriding system value values (91,1,'new')")
+        await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value select g,'s'||g,now() from generate_series(1,12) g on conflict (seller_id) do nothing")
         items = [  # id, тайтл, condition, цена, продавец, +сек к first_seen_at
           (101,'Suzuki impeller kit 17400-90J11','new',50,1,0),
           (102,'Suzuki impeller repair kit OEM','new',55,1,1),
@@ -50,7 +51,7 @@ async def main():
         mem = [('A1',101),('A2',101),('A1',102),('A2',103),('A1',104),('A1',105),('A1',106),('A1',107),
                ('A1',108),('A1',109),('A1',110),('B1',111),('C1',120),('C1',121),('D1',140),('D1',141),('B1',130)]
         for a,iid in mem:
-            await ed.execute("insert into catalog_items values($1,1,$2,now(),now(),0,true)",a,iid)
+            await ed.execute("insert into catalog_items(article,profile_id,item_id) values($1,91,$2)",a,iid)
         await ed.execute("insert into item_shipping values(101,1,10,now()),(103,1,5,now()),(106,1,20,now()),(102,1,5,now())")
         mapping={'A1':'smart_X','A2':'smart_X','B1':'smart_Y','C1':'smart_Z','D1':'smart_W'}
         prices={'smart_X':Decimal(100),'smart_Y':None,'smart_Z':None,'smart_W':None}

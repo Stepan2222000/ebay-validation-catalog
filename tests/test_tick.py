@@ -41,16 +41,17 @@ async def main():
                               'PARTS_PRICES_DSN', 'SMART_DSN') as (ed, vd, pp, sm):
         # --- синтетика: смарт-артикул прямо в smart (под откат); sync-триггер
         # parts_sync_articles сам разложит массив articles в part_articles ---
-        await sm.execute("insert into parts(id,name,articles,is_draft,product_type) "
-                         "values('smart_99999901','тестовая деталь',array['TST-A1','TST-A2'],false,'Для водного транспорта')")
+        await sm.execute("insert into parts(id,name,articles,is_draft) "
+                         "values('smart_99999901','тестовая деталь',array['TST-A1','TST-A2'],false)")
         await pp.execute("insert into buying.smart_prices(smart_part_id,max_buy_price_usd,updated_by) values('smart_99999901',100,'e2e-test')")
         # --- синтетика: каталог ---
         await ed.execute("insert into contexts overriding system value values (1,'EBAY_US','10001')")
-        await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value select g,'s'||g,now() from generate_series(1,5) g")
+        await ed.execute("insert into search_profiles(profile_id,context_id,condition) overriding system value values (91,1,'new')")
+        await ed.execute("insert into sellers(seller_id,name,first_seen_at) overriding system value select g,'s'||g,now() from generate_series(1,5) g on conflict (seller_id) do nothing")
         await ed.execute("""insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead) values
             (201,'Test impeller kit one','new',50,1,now()-interval '10 minutes',now(),false),
             (202,'Test impeller kit two','new',60,2,now()-interval '9 minutes',now(),false)""")
-        await ed.execute("insert into catalog_items values('TST-A1',1,201,now()-interval '10 minutes',now(),0,true),('TST-A2',1,202,now()-interval '9 minutes',now(),0,true)")
+        await ed.execute("insert into catalog_items(article,profile_id,item_id,first_seen_at) values('TST-A1',91,201,now()-interval '10 minutes'),('TST-A2',91,202,now()-interval '9 minutes')")
 
         print('=== T1: bootstrap-тик (курсоры с эпохи) ===')
         s = await run_tick(ed,vd,pp,sm,cfg)
@@ -69,23 +70,26 @@ async def main():
         print('=== T3: новый item ловится курсором items/catalog ===')
         await ed.execute("""insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead)
             values(203,'Test impeller kit three','new',70,3,now(),now(),false)""")
-        await ed.execute("insert into catalog_items values('TST-A1',1,203,now(),now(),0,true)")
+        await ed.execute("insert into catalog_items(article,profile_id,item_id) values('TST-A1',91,203)")
         s = await run_tick(ed,vd,pp,sm,cfg)
         st = await tick_state(vd)
         check('203 одобрен', st.get(203,(None,))[0]=='approved', (s,st))
 
         print('=== T4: смена title -> changes -> задача на перепарс + ревалидация ===')
         await ed.execute("update items set title='Test impeller kit one V2' where item_id=201")
-        await ed.execute("""insert into changes values(now(),201,'TST-A1',1,
+        await ed.execute("""insert into changes(changed_at,item_id,article,profile_id,context_id,field_id,kind,old_value,new_value,source)
+            values(now(),201,'TST-A1',91,1,
             (select field_id from fields where scope='item' and name='title'),'c','old','new','S')""")
         s = await run_tick(ed,vd,pp,sm,cfg)
-        tasks = await vd.fetch('select * from reparse_tasks')
-        check('задача на перепарс создана', len(tasks)==1 and tasks[0]['item_id']==201, tasks)
+        # фильтр по тестовому item: дельта может принести и реальные title-изменения
+        tasks = await vd.fetch('select * from reparse_tasks where item_id=201')
+        check('задача на перепарс создана', len(tasks)==1, tasks)
         check('201 ревалидирован (validated>=1)', s['validated']>=1, s)
-        await ed.execute("""insert into changes values(now(),201,'TST-A1',1,
+        await ed.execute("""insert into changes(changed_at,item_id,article,profile_id,context_id,field_id,kind,old_value,new_value,source)
+            values(now(),201,'TST-A1',91,1,
             (select field_id from fields where scope='item' and name='title'),'c','new','newer','S')""")
         s = await run_tick(ed,vd,pp,sm,cfg)
-        tasks = await vd.fetch('select * from reparse_tasks')
+        tasks = await vd.fetch('select * from reparse_tasks where item_id=201')
         check('дубль активной задачи не создан', len(tasks)==1, tasks)
 
         print('=== T5: обновление доставки -> ревалидация по цене ===')
@@ -105,7 +109,7 @@ async def main():
         print('=== T7: падение в середине тика не двигает курсоры ===')
         await ed.execute("""insert into items(item_id,title,condition,price_usd,seller_id,first_seen_at,last_seen_at,is_dead)
             values(204,'Test impeller kit four','new',10,4,now(),now(),false)""")
-        await ed.execute("insert into catalog_items values('TST-A2',1,204,now(),now(),0,true)")
+        await ed.execute("insert into catalog_items(article,profile_id,item_id) values('TST-A2',91,204)")
         before = await get_cursors(vd)
         try:
             await run_tick(ed, BoomVD(vd), pp, sm, cfg)

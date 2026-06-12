@@ -26,10 +26,15 @@
 
 Что именно читается:
 
-- `ebay_data.catalog_items` — присутствие item в каталоге: `article`, `context_id`,
+- `ebay_data.catalog_items` — присутствие item в каталоге: `article`, `profile_id`,
   `item_id`, `first_seen_at`, `last_seen_at`, `misses`, `is_active`. Артикул (`article`) —
-  поисковый запрос каталога. FK на `items`: строка каталога всегда имеет строку item,
-  но item может быть «заглушкой» (все данные NULL, пока парсер не обработал).
+  поисковый запрос каталога. Членство ведётся по **профилю поиска**
+  (`search_profiles`: `profile_id → context_id`, `condition`, `min/max_price`);
+  контекст валидатор выводит join'ом по `profile_id`. Если два профиля одного
+  контекста приведут item по одному артикулу, строки схлопываются в одну единицу
+  валидации (живая, пока живо хотя бы одно членство). FK на `items`: строка
+  каталога всегда имеет строку item, но item может быть «заглушкой» (все данные
+  NULL, пока парсер не обработал).
 - `ebay_data.items` — данные объявления: `title`, `condition` (нормализован парсером до
   `'new'` / `'other'`), `price_usd`, `seller_id`, `is_dead`, `first_seen_at`.
 - `ebay_data.item_shipping` — стоимость доставки per (item, context): `shipping_cost`, `updated_at`.

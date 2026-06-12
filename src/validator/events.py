@@ -25,14 +25,17 @@ DELTA_SQL = {
         'select smart_part_id, updated_at as ts from buying.smart_prices where updated_at > $1',
 }
 
-# полные группы: все строки членства каталога по заданным артикулам
+# полные группы: все строки членства каталога по заданным артикулам.
+# членство в catalog_items ведётся по профилям; контекст выводится через
+# search_profiles (profile_id -> context_id), доставка джойнится по нему же
 FETCH_GROUPS_SQL = """
-select ci.article, ci.context_id, ci.item_id, ci.is_active as catalog_active,
+select ci.article, sp.context_id, ci.item_id, ci.is_active as catalog_active,
        i.title, i.condition, i.price_usd, i.seller_id, i.is_dead, i.first_seen_at,
        s.shipping_cost
 from catalog_items ci
+join search_profiles sp using (profile_id)
 join items i using (item_id)
-left join item_shipping s on s.item_id = ci.item_id and s.context_id = ci.context_id
+left join item_shipping s on s.item_id = ci.item_id and s.context_id = sp.context_id
 where ci.article = any($1::text[])
 """
 
