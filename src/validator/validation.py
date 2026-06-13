@@ -4,6 +4,7 @@
 все строки членства его каталога. Дедуп — соревнование по всей группе, на неполной
 группе слоты раздались бы неверно.
 """
+import os
 from dataclasses import dataclass, field
 
 from .fingerprint import norm_title, fingerprint
@@ -111,6 +112,9 @@ def judge_group(units: list, cfg, max_price) -> None:
         if not u.alive:               # встроенная, невыключаемая проверка (SPEC §3)
             u.status, u.reasons = 'rejected', ['inactive']
             continue
+        if getattr(u, 'is_junk', False):   # мусор-фильтр junk_filter: реджект до dedup,
+            u.status, u.reasons = 'rejected', ['ai_filter']  # чтобы мусор не занимал слоты
+            continue
         judgeable.append(u)
 
     failed: dict[int, str] = {}       # item_id -> причина из пред-дедупных проверок
@@ -203,6 +207,16 @@ async def validate_groups(vd, by_part: dict, cfg, prices: dict,
             list(by_part),
         )
     }
+
+    # мусор-фильтр (пакет junk_filter) за флагом JUNK_FILTER_ENABLED: классифицируем
+    # все юниты разом и помечаем мусор; judge_group реджектит их как ['ai_filter'].
+    # Применяется на каждой валидации -> реджект стабилен, валидатор его не откатывает.
+    if os.environ.get('JUNK_FILTER_ENABLED') == '1':
+        import junk_filter
+        all_units = [u for units in by_part.values() for u in units]
+        junk_keys = junk_filter.classify_units(all_units)
+        for u in all_units:
+            u.is_junk = u.key in junk_keys
 
     upserts, bumps = [], []
     for part_id, units in by_part.items():

@@ -4,6 +4,8 @@ services:
     container_name: ebay_validation_catalog_app
     restart: unless-stopped
     env_file: .env            # прод-DSN с именами контейнеров (см. .env.example)
+    environment:
+      - JUNK_FILTER_ENABLED=1 # включить мусор-фильтр (пакет junk_filter)
     networks:
       - db_default            # общая сеть постгрес-контейнеров: базы видны по именам
 

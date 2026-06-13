@@ -1,2 +1,3 @@
 asyncpg>=0.30
 pyyaml>=6
+transformers==5.12.0    # torch ставится отдельно из CPU-индекса в Dockerfile
